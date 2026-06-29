@@ -8,7 +8,19 @@ type FlowStatus = "idle" | "running" | "done";
 type Recommendation = "Ne rien faire" | "POC" | "MVP";
 type Complexity = "Simple" | "Moyen" | "Complexe";
 type InterestLevel = "Faible" | "Moyen" | "Fort";
+type ProcessCategory = "emails" | "documents" | "crm" | "support" | "backoffice" | "logistics" | "other";
 type AnswerKind = "text" | "number" | "yesno" | "choice";
+
+type CategoryConfig = {
+  label: string;
+  description: string;
+  typicalTasks: string[];
+  typicalInputs: string[];
+  typicalOutputs: string[];
+  typicalControls: string[];
+  typicalTools: string[];
+  filesToRequest: string;
+};
 
 type ProspectInfo = {
   company: string;
@@ -47,6 +59,7 @@ type FeasibilityInputs = {
 
 type DiagnosticState = {
   prospect: ProspectInfo;
+  category: ProcessCategory;
   processName: string;
   pain: string;
   tools: string;
@@ -68,6 +81,7 @@ type DiagnosticState = {
 
 type TranscriptItem = {
   id: string;
+  questionId?: string;
   stage: StageId;
   question: string;
   answer: string;
@@ -87,6 +101,91 @@ type Question = {
 
 const STORAGE_KEY = "diagnostic-agent:guided-diagnostic";
 const EXPORT_VERSION = 2;
+
+const CATEGORY_CONFIGS: Record<ProcessCategory, CategoryConfig> = {
+  emails: {
+    label: "Emails & relances",
+    description: "Traitement de boîtes mail, demandes entrantes, relances et réponses préparées.",
+    typicalTasks: ["trier les emails entrants", "préparer une réponse", "relancer les clients ou fournisseurs", "extraire une demande depuis un email"],
+    typicalInputs: ["emails", "pièces jointes", "historique client", "modèles de réponse"],
+    typicalOutputs: ["réponse prête à valider", "ticket", "ligne CRM", "relance planifiée"],
+    typicalControls: ["ton de la réponse", "données client", "pièce jointe correcte", "validation humaine avant envoi"],
+    typicalTools: ["Gmail/Outlook", "IMAP", "CRM", "Drive", "ERP"],
+    filesToRequest: "5 à 10 emails représentatifs, modèles de réponse, règles de tri et exemples de relances",
+  },
+  documents: {
+    label: "Documents, PDF & Excel",
+    description: "Lecture, contrôle, extraction ou génération de documents métier.",
+    typicalTasks: ["extraire des informations d'un PDF", "contrôler un fichier Excel", "comparer deux documents", "générer un document standard"],
+    typicalInputs: ["PDF", "Excel", "CSV", "bons de commande", "factures", "contrats"],
+    typicalOutputs: ["tableau contrôlé", "rapport d'écarts", "document généré", "alerte d'anomalie"],
+    typicalControls: ["champs obligatoires", "montants", "dates", "cohérence entre documents", "format attendu"],
+    typicalTools: ["Excel", "Drive/SharePoint", "ERP", "logiciel métier", "email"],
+    filesToRequest: "3 à 5 documents d'entrée, un exemple de sortie attendue et les règles de contrôle",
+  },
+  crm: {
+    label: "CRM, ventes & relances",
+    description: "Qualification prospect, compte rendu, scoring, relance et mise à jour CRM.",
+    typicalTasks: ["résumer un rendez-vous", "mettre à jour une fiche CRM", "préparer une relance", "qualifier une opportunité"],
+    typicalInputs: ["notes de RDV", "emails", "fiche prospect", "historique CRM", "critères de qualification"],
+    typicalOutputs: ["fiche CRM complétée", "email de relance", "score d'intérêt", "prochaine action"],
+    typicalControls: ["prochaine étape claire", "décisionnaire", "budget", "échéance", "objections"],
+    typicalTools: ["HubSpot", "Pipedrive", "Notion", "Airtable", "Google Sheets", "email"],
+    filesToRequest: "2 à 3 fiches CRM exemples, notes de rendez-vous, relances existantes et critères de qualification",
+  },
+  support: {
+    label: "Support client",
+    description: "Classification, réponse, escalade et suivi des demandes client.",
+    typicalTasks: ["classer les demandes", "proposer une réponse", "détecter une urgence", "créer ou mettre à jour un ticket"],
+    typicalInputs: ["tickets", "emails support", "FAQ", "historique client", "captures"],
+    typicalOutputs: ["réponse brouillon", "priorité", "catégorie", "ticket enrichi", "escalade"],
+    typicalControls: ["niveau d'urgence", "client concerné", "promesse commerciale", "validation avant réponse sensible"],
+    typicalTools: ["Zendesk", "Freshdesk", "Intercom", "email", "Slack/Teams", "base de connaissances"],
+    filesToRequest: "10 tickets ou emails support anonymisés, catégories actuelles, FAQ et exemples de bonnes réponses",
+  },
+  backoffice: {
+    label: "Back-office administratif",
+    description: "Saisie, contrôle, rapprochement, classement et reporting administratif.",
+    typicalTasks: ["saisir des données", "rapprocher des informations", "préparer un reporting", "classer des documents"],
+    typicalInputs: ["formulaires", "emails", "Excel", "exports ERP", "pièces administratives"],
+    typicalOutputs: ["dossier complété", "tableau mis à jour", "rapport", "alerte"],
+    typicalControls: ["champs manquants", "doublons", "cohérence dossier", "validation responsable"],
+    typicalTools: ["Excel", "ERP", "Drive", "SharePoint", "logiciel métier", "email"],
+    filesToRequest: "exports ou tableaux actuels, exemples de dossiers complets/incomplets et règles de validation",
+  },
+  logistics: {
+    label: "Logistique, commandes & fichiers",
+    description: "Contrôle de commandes, packing lists, expéditions, stocks et échanges fournisseurs.",
+    typicalTasks: ["contrôler une packing list", "rapprocher commande et livraison", "détecter un écart", "préparer une notification"],
+    typicalInputs: ["commandes", "packing lists", "factures", "exports stock", "emails fournisseur"],
+    typicalOutputs: ["écarts détectés", "statut de contrôle", "email fournisseur", "mise à jour ERP"],
+    typicalControls: ["références", "quantités", "prix", "dates", "incoterms", "doublons"],
+    typicalTools: ["ERP", "Excel", "email", "WMS", "Drive/SharePoint"],
+    filesToRequest: "3 à 5 commandes, packing lists ou exports réels, plus un exemple de contrôle validé",
+  },
+  other: {
+    label: "Autre / à cadrer",
+    description: "Sujet spécifique à clarifier avant de choisir un scénario d'automatisation.",
+    typicalTasks: ["identifier un processus répétitif", "clarifier les règles", "définir un résultat utile"],
+    typicalInputs: ["documents", "emails", "tableaux", "outils métier", "règles internes"],
+    typicalOutputs: ["synthèse", "fichier mis à jour", "recommandation", "alerte", "tâche préparée"],
+    typicalControls: ["règles métier", "exceptions", "validation humaine", "qualité des données"],
+    typicalTools: ["Excel", "email", "Drive", "CRM", "ERP", "outil métier"],
+    filesToRequest: "3 à 5 exemples représentatifs et une sortie idéale validée",
+  },
+};
+
+function getCategoryConfig(category: ProcessCategory) {
+  return CATEGORY_CONFIGS[category] ?? CATEGORY_CONFIGS.other;
+}
+
+function categoryLabel(category: ProcessCategory) {
+  return getCategoryConfig(category).label;
+}
+
+function formatExamples(values: string[]) {
+  return values.slice(0, 4).join(", ");
+}
 
 const questions: Question[] = [
   {
@@ -122,6 +221,16 @@ const questions: Question[] = [
     objective: "Clarifier l’enjeu principal du prospect.",
     prompt: "Pourquoi ce sujet est-il important maintenant ?",
     why: "Je cherche le déclencheur commercial : surcharge, erreurs, croissance, nouveau client, audit, retard, etc.",
+  },
+  {
+    id: "category",
+    stage: "process",
+    title: "Type de projet",
+    objective: "Adapter immédiatement les questions au cas d’usage du client.",
+    prompt: "Dans quelle famille se situe le sujet que vous voulez explorer ?",
+    why: "Je vais adapter les prochaines questions avec des exemples métier plutôt que dérouler un questionnaire générique.",
+    kind: "choice",
+    choices: ["emails", "documents", "crm", "support", "backoffice", "logistics", "other"],
   },
   {
     id: "processName",
@@ -356,6 +465,7 @@ const emptyDiagnostic: DiagnosticState = {
     context: "",
     meetingDate: new Date().toISOString().slice(0, 10),
   },
+  category: "other",
   processName: "",
   pain: "",
   tools: "",
@@ -392,7 +502,7 @@ const emptyDiagnostic: DiagnosticState = {
   nextAction: "",
   interestLevel: "Moyen",
   objections: "",
-  filesToRequest: "3 à 5 exemples représentatifs",
+  filesToRequest: CATEGORY_CONFIGS.other.filesToRequest,
   followUpDate: "",
 };
 
@@ -412,6 +522,84 @@ function formatHours(minutes: number) {
 
 function parseYes(answer: string) {
   return /^(oui|yes|y|o|ok|disponible|stable|claire?|document)/i.test(answer.trim());
+}
+
+function getChoiceLabel(question: Question, choice: string) {
+  if (question.id === "category") return categoryLabel(choice as ProcessCategory);
+  return choice;
+}
+
+function buildContextualQuestion(question: Question, diagnostic: DiagnosticState) {
+  const config = getCategoryConfig(diagnostic.category);
+  const process = diagnostic.processName || "ce processus";
+  const company = diagnostic.prospect.company || "votre entreprise";
+  const activity = diagnostic.prospect.activity || "votre activité";
+
+  switch (question.id) {
+    case "category":
+      return "Pour que je vous pose les bonnes questions, votre sujet ressemble plutôt à quel type de besoin ?";
+    case "processName":
+      return `Dans ${activity}, quel processus précis voulez-vous qu’on regarde aujourd’hui ? Par exemple : ${formatExamples(config.typicalTasks)}.`;
+    case "pain":
+      return `Sur ${process}, qu’est-ce qui vous fait perdre le plus de temps ou crée le plus de stress aujourd’hui ?`;
+    case "people":
+      return `Qui intervient concrètement sur ${process}, et qui valide quand il y a un doute ?`;
+    case "tools":
+      return `Quels outils, fichiers ou boîtes mail utilisez-vous pour ${process} ? Par exemple : ${formatExamples(config.typicalTools)}.`;
+    case "trigger":
+      return `Qu’est-ce qui déclenche ${process} chez ${company} : un email, un fichier reçu, une commande, une demande client, autre chose ?`;
+    case "inputs":
+      return `Quelles informations arrivent au départ ? Sur ce type de sujet, je pense par exemple à : ${formatExamples(config.typicalInputs)}.`;
+    case "treatment":
+      return `Quand la demande arrive, qu’est-ce que la personne fait étape par étape, même si cela paraît évident ?`;
+    case "controls":
+      return `Pour éviter une erreur, quels contrôles faites-vous avant de considérer le résultat comme bon ? Exemples possibles : ${formatExamples(config.typicalControls)}.`;
+    case "output":
+      return `À la fin, quel résultat concret doit sortir ? Par exemple : ${formatExamples(config.typicalOutputs)}.`;
+    case "transmission":
+      return `Une fois le résultat prêt, qui doit le recevoir ou le valider, et par quel canal ?`;
+    case "currentMinutes":
+      return `Sur ${process}, combien de minutes prend un traitement complet aujourd’hui, en moyenne ?`;
+    case "targetMinutes":
+      return `Si un agent prépare 80 % du travail mais qu’un humain garde le contrôle, combien de minutes resteraient à passer ?`;
+    case "monthlyVolume":
+      return `Combien de fois par mois ce cas se présente environ ?`;
+    case "hourlyCost":
+      return `Quel coût horaire approximatif dois-je utiliser pour valoriser ce temps ? Si vous ne savez pas, on peut partir sur 45 €.`;
+    case "frequentErrors":
+      return `Sur ${process}, quelles erreurs ou oublis reviennent le plus souvent ?`;
+    case "errorCost":
+      return `Quand une erreur arrive, qu’est-ce que ça coûte concrètement : temps perdu, retard, argent, image client ou litige ?`;
+    case "hasExamples":
+      return `Est-ce que vous avez quelques exemples réels à me montrer ? Idéalement : ${config.filesToRequest}.`;
+    case "stableStructure":
+      return `Les demandes ou fichiers se ressemblent-ils la plupart du temps, ou est-ce très variable selon les cas ?`;
+    case "rulesDocumented":
+      return `Les règles à appliquer sont-elles écrites quelque part, ou sont-elles surtout dans la tête de l’équipe ?`;
+    case "validatorIdentified":
+      return `Qui serait la bonne personne pour valider les premiers résultats produits par l’agent ?`;
+    case "outputTemplate":
+      return `Avez-vous déjà un modèle de sortie attendu, comme un email type, un Excel, un PDF ou une fiche CRM ?`;
+    case "exceptions":
+      return `Quels sont les cas particuliers qui feraient sortir l’agent du chemin standard ?`;
+    case "idealResult":
+      return `Si on automatise seulement la partie la plus répétitive, quel résultat serait déjà vraiment utile pour vous ?`;
+    case "nextAction":
+      return `Pour avancer sans perdre de temps, quelle prochaine étape vous paraît réaliste : m’envoyer des exemples, cadrer un POC, faire un atelier, ou attendre ?`;
+    case "objections":
+      return `Qu’est-ce qui pourrait bloquer le projet : budget, disponibilité, données, décisionnaire, outil interne ou autre ?`;
+    default:
+      return question.prompt;
+  }
+}
+
+function buildContextualWhy(question: Question, diagnostic: DiagnosticState) {
+  if (question.id === "category") return question.why;
+  const config = getCategoryConfig(diagnostic.category);
+  if (diagnostic.category !== "other" && ["processName", "inputs", "controls", "output", "hasExamples"].includes(question.id)) {
+    return `${question.why} Catégorie détectée : ${config.label}. Je garde donc les exemples centrés sur ${config.description.toLowerCase()}`;
+  }
+  return question.why;
 }
 
 function calculateRoi(roi: RoiInputs) {
@@ -482,12 +670,14 @@ function buildProspectSummary(diagnostic: DiagnosticState) {
   return `# Diagnostic processus — ${diagnostic.prospect.company || "Prospect"}
 
 ## 1. Processus analysé
-${diagnostic.processName || "Processus à préciser"}
+- Catégorie : ${categoryLabel(diagnostic.category)}
+- Processus : ${diagnostic.processName || "Processus à préciser"}
 
 ${diagnostic.pain || "La douleur principale reste à préciser."}
 
 ## 2. Situation actuelle
 - Activité : ${diagnostic.prospect.activity || "à préciser"}
+- Cas d’usage probables : ${formatExamples(getCategoryConfig(diagnostic.category).typicalTasks)}
 - Outils utilisés : ${diagnostic.tools || "à préciser"}
 - Personnes impliquées : ${diagnostic.people || "à préciser"}
 - Étapes principales : ${diagnostic.processMap.trigger || "déclencheur à préciser"} → ${diagnostic.processMap.inputs || "entrées à préciser"} → ${diagnostic.processMap.treatment || "traitement à préciser"} → ${diagnostic.processMap.output || "sortie à préciser"}
@@ -516,7 +706,7 @@ ${diagnostic.pain || "La douleur principale reste à préciser."}
 ${decision.recommendation} — ${decision.reason}
 
 ## 7. Prochaine étape
-${diagnostic.nextAction || (decision.recommendation === "Ne rien faire" ? "Ne pas lancer de projet pour l’instant ; revisiter si le volume augmente." : "Demander 3 à 5 fichiers représentatifs et cadrer un POC court.")}`;
+${diagnostic.nextAction || (decision.recommendation === "Ne rien faire" ? "Ne pas lancer de projet pour l’instant ; revisiter si le volume augmente." : `Demander ${diagnostic.filesToRequest || getCategoryConfig(diagnostic.category).filesToRequest} et cadrer un POC court.`)}`;
 }
 
 function buildCrmSummary(diagnostic: DiagnosticState, transcript: TranscriptItem[]) {
@@ -529,6 +719,7 @@ function buildCrmSummary(diagnostic: DiagnosticState, transcript: TranscriptItem
 - Entreprise : ${diagnostic.prospect.company || "à renseigner"}
 - Contact : ${diagnostic.prospect.contact || "à renseigner"}
 - Activité : ${diagnostic.prospect.activity || "à renseigner"}
+- Catégorie : ${categoryLabel(diagnostic.category)}
 - Date RDV : ${diagnostic.prospect.meetingDate || "à renseigner"}
 - Contexte : ${diagnostic.prospect.context || "à préciser"}
 - Problème principal : ${diagnostic.pain || "à préciser"}
@@ -576,6 +767,10 @@ function applyAnswer(current: DiagnosticState, question: Question, rawAnswer: st
       return { ...current, prospect: { ...current.prospect, activity: answer } };
     case "context":
       return { ...current, prospect: { ...current.prospect, context: answer } };
+    case "category": {
+      const category = (Object.keys(CATEGORY_CONFIGS).includes(answer) ? answer : "other") as ProcessCategory;
+      return { ...current, category, filesToRequest: getCategoryConfig(category).filesToRequest };
+    }
     case "processName":
       return { ...current, processName: answer };
     case "pain":
@@ -681,6 +876,8 @@ export default function Home() {
   }, [hasHydrated, status, currentIndex, diagnostic, transcript]);
 
   const currentQuestion = questions[Math.min(currentIndex, questions.length - 1)];
+  const currentPrompt = currentQuestion ? buildContextualQuestion(currentQuestion, diagnostic) : "";
+  const currentWhy = currentQuestion ? buildContextualWhy(currentQuestion, diagnostic) : "";
   const progress = status === "done" ? 100 : Math.round((currentIndex / questions.length) * 100);
   const remaining = Math.max(questions.length - currentIndex, 0);
   const roi = useMemo(() => calculateRoi(diagnostic.roi), [diagnostic.roi]);
@@ -707,8 +904,9 @@ export default function Home() {
       ...current,
       {
         id: crypto.randomUUID(),
+        questionId: currentQuestion.id,
         stage: currentQuestion.stage,
-        question: currentQuestion.prompt,
+        question: currentPrompt,
         answer: cleanAnswer,
       },
     ]);
@@ -727,7 +925,7 @@ export default function Home() {
     if (currentIndex === 0 || transcript.length === 0) return;
     const previousTranscript = transcript.slice(0, -1);
     const rebuilt = previousTranscript.reduce((state, item) => {
-      const question = questions.find((candidate) => candidate.prompt === item.question);
+      const question = questions.find((candidate) => candidate.id === item.questionId) ?? questions.find((candidate) => candidate.prompt === item.question);
       return question ? applyAnswer(state, question, item.answer) : state;
     }, { ...emptyDiagnostic, prospect: { ...emptyDiagnostic.prospect, meetingDate: diagnostic.prospect.meetingDate } });
 
@@ -834,8 +1032,8 @@ export default function Home() {
 
               <div className="my-8 rounded-[2rem] border border-cyan-300/20 bg-cyan-300/10 p-6">
                 <p className="text-sm font-semibold uppercase tracking-[0.2em] text-cyan-200">Agent IA</p>
-                <h2 className="mt-3 text-2xl font-semibold leading-tight md:text-4xl">{currentQuestion.prompt}</h2>
-                <p className="mt-4 text-sm leading-6 text-cyan-50/80">{currentQuestion.why}</p>
+                <h2 className="mt-3 text-2xl font-semibold leading-tight md:text-4xl">{currentPrompt}</h2>
+                <p className="mt-4 text-sm leading-6 text-cyan-50/80">{currentWhy}</p>
               </div>
 
               <form onSubmit={submitAnswer} className="space-y-4">
@@ -843,7 +1041,7 @@ export default function Home() {
                   <div className="flex flex-wrap gap-3">
                     {currentQuestion.choices?.map((choice) => (
                       <button key={choice} onClick={() => submitAnswer(undefined, choice)} type="button" className="rounded-full border border-white/10 bg-white/[0.06] px-5 py-3 text-sm font-semibold text-zinc-100 transition hover:border-cyan-300/50 hover:bg-cyan-300/10">
-                        {choice}
+                        {getChoiceLabel(currentQuestion, choice)}
                       </button>
                     ))}
                   </div>
@@ -851,7 +1049,7 @@ export default function Home() {
                   <div className="flex flex-wrap gap-3">
                     {['Oui', 'Non'].map((choice) => (
                       <button key={choice} onClick={() => submitAnswer(undefined, choice)} type="button" className="rounded-full border border-white/10 bg-white/[0.06] px-6 py-3 text-sm font-semibold text-zinc-100 transition hover:border-cyan-300/50 hover:bg-cyan-300/10">
-                        {choice}
+                        {getChoiceLabel(currentQuestion, choice)}
                       </button>
                     ))}
                     <input value={answer} onChange={(event) => setAnswer(event.target.value)} placeholder="Ou préciser en quelques mots…" className="min-w-[240px] flex-1 rounded-2xl border border-white/10 bg-black/30 px-4 py-3 text-sm outline-none placeholder:text-zinc-600 focus:border-cyan-300/60" />
@@ -880,6 +1078,7 @@ export default function Home() {
             </section>
 
             <aside className="space-y-5">
+              <SummaryCard title="Contexte adapté" rows={[`Catégorie : ${categoryLabel(diagnostic.category)}`, `À demander : ${diagnostic.filesToRequest}`, `Exemples : ${formatExamples(getCategoryConfig(diagnostic.category).typicalTasks)}`]} />
               <SummaryCard title="ROI estimé" rows={[`Gain/traitement : ${formatHours(roi.savedMinutes)}`, `Gain mensuel : ${formatCurrency(roi.monthlyGain)}`, `Gain annuel : ${formatCurrency(roi.annualGain)}`]} />
               <SummaryCard title="Décision provisoire" rows={[`Complexité : ${complexity}`, `Recommandation : ${decision.recommendation}`, decision.reason]} />
               <section className="rounded-[2rem] border border-white/10 bg-white/[0.04] p-5">
