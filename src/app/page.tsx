@@ -2,9 +2,11 @@
 
 import Link from "next/link";
 import { FormEvent, useEffect, useMemo, useState } from "react";
+import type { AgentMessage, AgentResponse, DiagnosticAgentState, FinalSummaryResponse } from "@/lib/agent/diagnostic-state";
 
 type StageId = "process" | "mapping" | "roi" | "feasibility" | "recommendation";
 type FlowStatus = "idle" | "running" | "done";
+type AppMode = "guided" | "agent";
 type Recommendation = "Ne rien faire" | "Audit complémentaire" | "POC" | "MVP" | "Projet complet";
 type Complexity = "Simple" | "Moyen" | "Complexe";
 type InterestLevel = "Faible" | "Moyen" | "Fort";
@@ -113,7 +115,44 @@ type Question = {
 };
 
 const STORAGE_KEY = "diagnostic-agent:guided-diagnostic";
-const EXPORT_VERSION = 2;
+const AGENT_STORAGE_KEY = "diagnostic-agent:agent-diagnostic";
+const SETTINGS_STORAGE_KEY = "diagnostic-agent:llm-settings";
+const EXPORT_VERSION = 3;
+
+type LlmSettings = {
+  apiKey: string;
+  model: string;
+  baseUrl: string;
+};
+
+const DEFAULT_LLM_SETTINGS: LlmSettings = {
+  apiKey: "",
+  model: "openai/gpt-4o-mini",
+  baseUrl: "https://openrouter.ai/api/v1",
+};
+
+function readLlmSettings(): LlmSettings {
+  if (typeof window === "undefined") return DEFAULT_LLM_SETTINGS;
+  try {
+    const stored = window.localStorage.getItem(SETTINGS_STORAGE_KEY);
+    return stored ? { ...DEFAULT_LLM_SETTINGS, ...JSON.parse(stored) } : DEFAULT_LLM_SETTINGS;
+  } catch {
+    return DEFAULT_LLM_SETTINGS;
+  }
+}
+
+function emptyAgentState(): DiagnosticAgentState {
+  return {
+    stage: "process_discovery",
+    painPoints: [],
+    toolsUsed: [],
+    filesUsed: [],
+    manualTasks: [],
+    risks: [],
+    missingInformation: ["entreprise", "processus", "volume mensuel", "temps par dossier", "exemples réels"],
+    conversation: [],
+  };
+}
 
 const CATEGORY_CONFIGS: Record<ProcessCategory, CategoryConfig> = {
   emails: {
@@ -912,6 +951,41 @@ function safeJsonParse(value: string | null) {
   }
 }
 
+function safeAgentJsonParse(value: string | null) {
+  if (!value) return null;
+  try {
+    return JSON.parse(value) as {
+      agentState?: DiagnosticAgentState;
+      agentMessages?: AgentMessage[];
+      lastUsedSkill?: string;
+      finalSummary?: FinalSummaryResponse | null;
+    };
+  } catch {
+    return null;
+  }
+}
+
+function decisionLabel(decision?: string) {
+  return ({
+    nothing: "Ne rien faire",
+    audit: "Audit complémentaire",
+    poc: "POC",
+    mvp: "MVP",
+    full_project: "Projet complet",
+  } as Record<string, string>)[decision ?? ""] ?? "à définir";
+}
+
+function formatAgentStage(stage: DiagnosticAgentState["stage"]) {
+  return ({
+    process_discovery: "Découverte processus",
+    manual_work_detection: "Travail manuel",
+    roi_diagnostic: "ROI",
+    automation_feasibility: "Faisabilité",
+    recommendation: "Recommandation",
+    commercial_synthesis: "Synthèse commerciale",
+  } as Record<DiagnosticAgentState["stage"], string>)[stage];
+}
+
 function applyAnswer(current: DiagnosticState, question: Question, rawAnswer: string): DiagnosticState {
   const answer = rawAnswer.trim();
   const yes = parseYes(answer);
@@ -1011,6 +1085,14 @@ export default function Home() {
   const [transcript, setTranscript] = useState<TranscriptItem[]>([]);
   const [copied, setCopied] = useState<string | null>(null);
   const [hasHydrated, setHasHydrated] = useState(false);
+  const [mode, setMode] = useState<AppMode>("guided");
+  const [agentInput, setAgentInput] = useState("");
+  const [agentState, setAgentState] = useState<DiagnosticAgentState>(() => emptyAgentState());
+  const [agentMessages, setAgentMessages] = useState<AgentMessage[]>([]);
+  const [agentLoading, setAgentLoading] = useState(false);
+  const [agentError, setAgentError] = useState<string | null>(null);
+  const [lastUsedSkill, setLastUsedSkill] = useState("process-discovery");
+  const [finalSummary, setFinalSummary] = useState<FinalSummaryResponse | null>(null);
 
   useEffect(() => {
     queueMicrotask(() => {
@@ -1020,6 +1102,13 @@ export default function Home() {
         setCurrentIndex(stored.currentIndex ?? 0);
         setDiagnostic({ ...emptyDiagnostic, ...stored.diagnostic });
         setTranscript(stored.transcript ?? []);
+      }
+      const storedAgent = safeAgentJsonParse(window.localStorage.getItem(AGENT_STORAGE_KEY));
+      if (storedAgent) {
+        setAgentState({ ...emptyAgentState(), ...storedAgent.agentState });
+        setAgentMessages(storedAgent.agentMessages ?? []);
+        setLastUsedSkill(storedAgent.lastUsedSkill ?? "process-discovery");
+        setFinalSummary(storedAgent.finalSummary ?? null);
       }
       setHasHydrated(true);
     });
@@ -1032,6 +1121,14 @@ export default function Home() {
       JSON.stringify({ version: EXPORT_VERSION, status, currentIndex, diagnostic, transcript }),
     );
   }, [hasHydrated, status, currentIndex, diagnostic, transcript]);
+
+  useEffect(() => {
+    if (!hasHydrated) return;
+    window.localStorage.setItem(
+      AGENT_STORAGE_KEY,
+      JSON.stringify({ version: EXPORT_VERSION, agentState, agentMessages, lastUsedSkill, finalSummary }),
+    );
+  }, [hasHydrated, agentState, agentMessages, lastUsedSkill, finalSummary]);
 
   const currentQuestion = questions[Math.min(currentIndex, questions.length - 1)];
   const currentPrompt = currentQuestion ? buildContextualQuestion(currentQuestion, diagnostic) : "";
@@ -1102,14 +1199,77 @@ export default function Home() {
   }
 
   function downloadExport() {
-    const payload = JSON.stringify({ version: EXPORT_VERSION, exportedAt: new Date().toISOString(), diagnostic, transcript }, null, 2);
+    const payload = JSON.stringify({ version: EXPORT_VERSION, exportedAt: new Date().toISOString(), mode, diagnostic, transcript, agentState, agentMessages, finalSummary }, null, 2);
     const blob = new Blob([payload], { type: "application/json" });
     const url = URL.createObjectURL(blob);
     const anchor = document.createElement("a");
     anchor.href = url;
-    anchor.download = `diagnostic-${diagnostic.prospect.company || "prospect"}.json`.toLowerCase().replace(/[^a-z0-9-.]+/g, "-");
+    anchor.download = `diagnostic-${diagnostic.prospect.company || agentState.company || "prospect"}.json`.toLowerCase().replace(/[^a-z0-9-.]+/g, "-");
     anchor.click();
     URL.revokeObjectURL(url);
+  }
+
+  function resetAgentDiagnostic() {
+    setAgentState(emptyAgentState());
+    setAgentMessages([]);
+    setAgentInput("");
+    setAgentError(null);
+    setLastUsedSkill("process-discovery");
+    setFinalSummary(null);
+  }
+
+  async function sendAgentMessage(event?: FormEvent<HTMLFormElement>) {
+    event?.preventDefault();
+    const message = agentInput.trim();
+    if (!message || agentLoading) return;
+
+    const settings = readLlmSettings();
+    const optimisticMessages: AgentMessage[] = [...agentMessages, { role: "user", content: message }];
+    setAgentMessages(optimisticMessages);
+    setAgentInput("");
+    setAgentLoading(true);
+    setAgentError(null);
+
+    try {
+      const response = await fetch("/api/agent", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ message, state: agentState, ...settings }),
+      });
+      const data = (await response.json()) as AgentResponse | { error?: string };
+      if (!response.ok || "error" in data) throw new Error("error" in data ? data.error : "Erreur agent.");
+      const agentResponse = data as AgentResponse;
+
+      setAgentState(agentResponse.updatedState);
+      setLastUsedSkill(agentResponse.usedSkill);
+      setAgentMessages([...optimisticMessages, { role: "assistant", content: agentResponse.answer }]);
+    } catch (error) {
+      setAgentError(error instanceof Error ? error.message : "Erreur agent.");
+      setAgentMessages(agentMessages);
+    } finally {
+      setAgentLoading(false);
+    }
+  }
+
+  async function generateFinalSummary() {
+    if (agentLoading) return;
+    const settings = readLlmSettings();
+    setAgentLoading(true);
+    setAgentError(null);
+    try {
+      const response = await fetch("/api/agent/summary", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ state: agentState, ...settings }),
+      });
+      const data = (await response.json()) as FinalSummaryResponse | { error?: string };
+      if (!response.ok || "error" in data) throw new Error("error" in data ? data.error : "Erreur synthèse.");
+      setFinalSummary(data as FinalSummaryResponse);
+    } catch (error) {
+      setAgentError(error instanceof Error ? error.message : "Erreur synthèse.");
+    } finally {
+      setAgentLoading(false);
+    }
   }
 
   return (
@@ -1159,7 +1319,40 @@ export default function Home() {
           </div>
         </section>
 
-        {status === "idle" ? (
+        <section className="mb-5 flex flex-col gap-3 rounded-[2rem] border border-white/10 bg-white/[0.04] p-4 md:flex-row md:items-center md:justify-between">
+          <div>
+            <p className="text-sm font-semibold text-zinc-100">Mode de diagnostic</p>
+            <p className="text-xs text-zinc-500">Le mode guidé reste disponible ; le mode Agent IA utilise les skills métier et fonctionne aussi sans clé LLM.</p>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <button onClick={() => setMode("guided")} type="button" className={`rounded-full px-4 py-2 text-sm font-semibold transition ${mode === "guided" ? "bg-cyan-300 text-slate-950" : "border border-white/10 text-zinc-300 hover:bg-white/10"}`}>
+              Mode guidé
+            </button>
+            <button onClick={() => setMode("agent")} type="button" className={`rounded-full px-4 py-2 text-sm font-semibold transition ${mode === "agent" ? "bg-cyan-300 text-slate-950" : "border border-white/10 text-zinc-300 hover:bg-white/10"}`}>
+              Agent IA
+            </button>
+          </div>
+        </section>
+
+        {mode === "agent" ? (
+          <AgentModePanel
+            agentInput={agentInput}
+            agentLoading={agentLoading}
+            agentMessages={agentMessages}
+            agentState={agentState}
+            error={agentError}
+            finalSummary={finalSummary}
+            lastUsedSkill={lastUsedSkill}
+            onCopy={copyText}
+            onDownload={downloadExport}
+            onGenerateSummary={generateFinalSummary}
+            onInputChange={setAgentInput}
+            onReset={resetAgentDiagnostic}
+            onSubmit={sendAgentMessage}
+          />
+        ) : null}
+
+        {mode === "guided" && status === "idle" ? (
           <section className="grid flex-1 place-items-center rounded-[2rem] border border-white/10 bg-white/[0.04] p-8 text-center shadow-2xl shadow-black/20">
             <div className="max-w-2xl">
               <p className="text-sm font-semibold uppercase tracking-[0.25em] text-cyan-200">Mode entretien</p>
@@ -1174,7 +1367,7 @@ export default function Home() {
           </section>
         ) : null}
 
-        {status === "running" ? (
+        {mode === "guided" && status === "running" ? (
           <div className="grid flex-1 gap-5 lg:grid-cols-[1fr_340px]">
             <section className="rounded-[2rem] border border-white/10 bg-white/[0.05] p-5 shadow-2xl shadow-black/20 md:p-8">
               <div className="mb-6 flex flex-wrap items-center gap-3">
@@ -1260,7 +1453,7 @@ export default function Home() {
           </div>
         ) : null}
 
-        {status === "done" ? (
+        {mode === "guided" && status === "done" ? (
           <div className="grid flex-1 gap-5 lg:grid-cols-[1fr_1fr]">
             <section className="rounded-[2rem] border border-cyan-300/20 bg-cyan-300/10 p-6 shadow-2xl shadow-black/20 lg:col-span-2">
               <p className="text-sm font-semibold uppercase tracking-[0.2em] text-cyan-200">Diagnostic terminé</p>
@@ -1287,6 +1480,122 @@ export default function Home() {
         ) : null}
       </div>
     </main>
+  );
+}
+
+function AgentModePanel({
+  agentInput,
+  agentLoading,
+  agentMessages,
+  agentState,
+  error,
+  finalSummary,
+  lastUsedSkill,
+  onCopy,
+  onDownload,
+  onGenerateSummary,
+  onInputChange,
+  onReset,
+  onSubmit,
+}: {
+  agentInput: string;
+  agentLoading: boolean;
+  agentMessages: AgentMessage[];
+  agentState: DiagnosticAgentState;
+  error: string | null;
+  finalSummary: FinalSummaryResponse | null;
+  lastUsedSkill: string;
+  onCopy: (label: string, text: string) => Promise<void>;
+  onDownload: () => void;
+  onGenerateSummary: () => Promise<void>;
+  onInputChange: (value: string) => void;
+  onReset: () => void;
+  onSubmit: (event?: FormEvent<HTMLFormElement>) => Promise<void>;
+}) {
+  const roi = agentState.roi;
+  const recommendation = agentState.recommendation;
+  const liveSummaryRows = [
+    `Entreprise : ${agentState.company || "à préciser"}`,
+    `Processus : ${agentState.processName || "à préciser"}`,
+    `Douleurs : ${agentState.painPoints.join(" ; ") || "à préciser"}`,
+    `Outils : ${agentState.toolsUsed.join(", ") || "à préciser"}`,
+    `Tâches manuelles : ${agentState.manualTasks.join(", ") || "à confirmer"}`,
+    `Risques : ${agentState.risks.join(" ; ") || "à vérifier"}`,
+  ];
+
+  return (
+    <div className="grid flex-1 gap-5 lg:grid-cols-[1.2fr_0.8fr]">
+      <section className="rounded-[2rem] border border-white/10 bg-white/[0.05] p-5 shadow-2xl shadow-black/20 md:p-6">
+        <div className="mb-5 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-[0.2em] text-cyan-200">Chat diagnostic</p>
+            <h2 className="mt-2 text-2xl font-semibold">Issa / Client → Agent IA</h2>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <button onClick={onReset} type="button" className="rounded-full border border-white/10 px-4 py-2 text-sm text-zinc-300 transition hover:bg-white/10">Réinitialiser</button>
+            <button onClick={onDownload} type="button" className="rounded-full border border-white/10 px-4 py-2 text-sm text-zinc-300 transition hover:bg-white/10">Export JSON</button>
+          </div>
+        </div>
+
+        <div className="min-h-[360px] max-h-[520px] space-y-3 overflow-auto rounded-[1.5rem] border border-white/10 bg-black/25 p-4">
+          {agentMessages.length ? agentMessages.map((message, index) => (
+            <article key={`${message.role}-${index}`} className={`rounded-2xl p-4 text-sm leading-6 ${message.role === "assistant" ? "bg-cyan-300/10 text-cyan-50" : "bg-white/[0.06] text-zinc-100"}`}>
+              <p className="mb-1 text-xs font-semibold uppercase tracking-[0.16em] text-zinc-500">{message.role === "assistant" ? "Agent IA" : "Issa / client"}</p>
+              <p className="whitespace-pre-wrap">{message.content}</p>
+            </article>
+          )) : (
+            <div className="rounded-2xl border border-cyan-300/20 bg-cyan-300/10 p-5 text-sm leading-6 text-cyan-50/90">
+              <p className="font-semibold">Question de départ</p>
+              <p className="mt-2">Pour commencer, vous pouvez me rappeler le nom de votre entreprise et le processus que vous voulez regarder ?</p>
+            </div>
+          )}
+          {agentLoading ? <p className="text-sm text-cyan-200">L’agent réfléchit…</p> : null}
+        </div>
+
+        <form onSubmit={onSubmit} className="mt-4 space-y-3">
+          <textarea
+            value={agentInput}
+            onChange={(event) => onInputChange(event.target.value)}
+            rows={4}
+            placeholder="Note ou réponse du client…"
+            className="w-full resize-y rounded-[1.5rem] border border-white/10 bg-black/30 px-5 py-4 text-base leading-7 outline-none transition placeholder:text-zinc-600 focus:border-cyan-300/60"
+          />
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <p className="text-xs text-zinc-500">Skill utilisée : {lastUsedSkill}</p>
+            <button disabled={!agentInput.trim() || agentLoading} type="submit" className="rounded-full bg-cyan-300 px-7 py-3 text-sm font-bold text-slate-950 transition hover:bg-cyan-200 disabled:cursor-not-allowed disabled:opacity-40">Envoyer à l’agent</button>
+          </div>
+          {error ? <p className="rounded-2xl border border-red-300/20 bg-red-300/10 p-3 text-sm text-red-100">{error}</p> : null}
+        </form>
+      </section>
+
+      <aside className="space-y-5">
+        <SummaryCard title="État du diagnostic" rows={[
+          `Étape : ${formatAgentStage(agentState.stage)}`,
+          `Skill : ${lastUsedSkill}`,
+          `Infos manquantes : ${agentState.missingInformation.join(", ") || "aucune"}`,
+          `ROI : ${roi ? `${formatHours(roi.monthlyHoursSaved * 60)}/mois · ${formatCurrency(roi.monthlyGain)}/mois · ${formatCurrency(roi.annualGain)}/an` : "à compléter"}`,
+          `Recommandation : ${decisionLabel(recommendation?.decision)}${recommendation ? ` (${recommendation.confidence})` : ""}`,
+        ]} />
+
+        <SummaryCard title="Synthèse live" rows={liveSummaryRows} />
+
+        <section className="rounded-[2rem] border border-white/10 bg-white/[0.04] p-5">
+          <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+            <h3 className="text-lg font-semibold">Synthèse finale</h3>
+            <button onClick={onGenerateSummary} disabled={agentLoading} type="button" className="rounded-full bg-emerald-300 px-4 py-2 text-sm font-bold text-slate-950 transition hover:bg-emerald-200 disabled:opacity-40">Générer</button>
+          </div>
+          {finalSummary ? (
+            <div className="space-y-3">
+              <pre className="max-h-[360px] overflow-auto whitespace-pre-wrap rounded-2xl border border-white/10 bg-black/35 p-4 text-xs leading-5 text-zinc-300">{finalSummary.summaryMarkdown}</pre>
+              <div className="flex flex-wrap gap-2">
+                <button onClick={() => onCopy("synthèse finale", finalSummary.summaryMarkdown)} type="button" className="rounded-full border border-white/10 px-4 py-2 text-sm text-zinc-300 transition hover:bg-white/10">Copier synthèse</button>
+                <button onClick={() => onCopy("mail de suivi", finalSummary.followUpEmail)} type="button" className="rounded-full border border-white/10 px-4 py-2 text-sm text-zinc-300 transition hover:bg-white/10">Copier mail</button>
+              </div>
+            </div>
+          ) : <p className="text-sm leading-6 text-zinc-500">Générez la synthèse quand le diagnostic contient assez d’éléments. Si le ROI manque, la synthèse l’indiquera.</p>}
+        </section>
+      </aside>
+    </div>
   );
 }
 
