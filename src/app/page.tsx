@@ -5,11 +5,24 @@ import { FormEvent, useEffect, useMemo, useState } from "react";
 
 type StageId = "process" | "mapping" | "roi" | "feasibility" | "recommendation";
 type FlowStatus = "idle" | "running" | "done";
-type Recommendation = "Ne rien faire" | "POC" | "MVP";
+type Recommendation = "Ne rien faire" | "Audit complémentaire" | "POC" | "MVP" | "Projet complet";
 type Complexity = "Simple" | "Moyen" | "Complexe";
 type InterestLevel = "Faible" | "Moyen" | "Fort";
 type ProcessCategory = "emails" | "documents" | "crm" | "support" | "backoffice" | "logistics" | "other";
 type AnswerKind = "text" | "number" | "yesno" | "choice";
+type DiagnosticSkillId = "process-discovery" | "manual-work-detection" | "roi-diagnostic" | "automation-feasibility" | "poc-mvp-recommendation" | "commercial-synthesis";
+
+type DiagnosticSkill = {
+  id: DiagnosticSkillId;
+  label: string;
+  objective: string;
+  whenToUse: string;
+  questions: string[];
+  signals: string[];
+  reasoning: string;
+  output: string;
+  pitfalls: string[];
+};
 
 type CategoryConfig = {
   label: string;
@@ -185,6 +198,126 @@ function categoryLabel(category: ProcessCategory) {
 
 function formatExamples(values: string[]) {
   return values.slice(0, 4).join(", ");
+}
+
+const DIAGNOSTIC_SKILLS: DiagnosticSkill[] = [
+  {
+    id: "process-discovery",
+    label: "Process discovery",
+    objective: "Faire décrire au client le processus réel, les personnes, fichiers, déclencheurs, volumes et erreurs.",
+    whenToUse: "Dès le début du rendez-vous, avant toute recommandation ou solution.",
+    questions: ["Quel est le processus aujourd’hui ?", "Qui intervient ?", "Quels fichiers ou outils sont utilisés ?", "À quel moment le problème commence ?", "Combien de fois par mois ?", "Combien de temps par dossier ?"],
+    signals: ["processus flou", "plusieurs intervenants", "fichiers récurrents", "volume mensuel", "erreurs fréquentes"],
+    reasoning: "Isoler un flux précis et assez fréquent avant de parler d’automatisation.",
+    output: "Processus cadré avec déclencheur, entrées, traitement, contrôles, sortie et acteurs.",
+    pitfalls: ["partir sur un sujet trop large", "parler solution avant d’avoir compris le flux", "oublier le volume"],
+  },
+  {
+    id: "manual-work-detection",
+    label: "Manual work detection",
+    objective: "Repérer les tâches répétitives qui peuvent être préparées, contrôlées ou automatisées.",
+    whenToUse: "Quand le client décrit les étapes, outils, fichiers et irritants.",
+    questions: ["Qu’est-ce qui est fait à la main ?", "Y a-t-il du copier-coller ?", "Faut-il lire des PDF, transformer Excel, renommer ou envoyer des fichiers ?", "Quels contrôles sont répétitifs ?"],
+    signals: ["copier-coller", "saisie manuelle", "renommage de fichiers", "lecture PDF", "transformation Excel", "emails répétitifs", "recherche d’informations", "contrôle entre fichiers"],
+    reasoning: "Distinguer un simple problème d’outil d’un vrai processus répétitif avec règles métier.",
+    output: "Liste des tâches automatisables et des tâches à garder en validation humaine.",
+    pitfalls: ["tout automatiser trop vite", "ignorer les contrôles humains", "confondre inconfort ponctuel et processus récurrent"],
+  },
+  {
+    id: "roi-diagnostic",
+    label: "ROI diagnostic",
+    objective: "Transformer le temps perdu et les erreurs en ordre de grandeur business.",
+    whenToUse: "Après avoir identifié un processus et un volume minimal.",
+    questions: ["Combien de minutes par dossier ?", "Combien de dossiers par mois ?", "Quel coût horaire utiliser ?", "Quelle erreur coûte le plus cher ?", "Quelle valeur commerciale indirecte ?"],
+    signals: ["temps par tâche", "volume mensuel", "coût horaire", "risque d’erreur", "retard client", "litige"],
+    reasoning: "Calculer gain mensuel et annuel, puis vérifier si le gain justifie POC, MVP ou projet.",
+    output: "Temps gagné, gain mensuel, gain annuel et valeur qualitative.",
+    pitfalls: ["recommander sans ROI", "supposer 100 % d’automatisation", "oublier le coût des erreurs"],
+  },
+  {
+    id: "automation-feasibility",
+    label: "Automation feasibility",
+    objective: "Vérifier si l’automatisation est réaliste sans promettre trop vite.",
+    whenToUse: "Avant de recommander POC, MVP ou projet complet.",
+    questions: ["Les données sont-elles structurées ?", "Les règles sont-elles stables ?", "Les fichiers changent-ils souvent ?", "Y a-t-il beaucoup d’exceptions ?", "Faut-il OCR, ERP ou validation humaine ?"],
+    signals: ["données sales", "règles floues", "exceptions nombreuses", "OCR", "ERP", "modèle de sortie absent", "validateur non identifié"],
+    reasoning: "Qualifier la complexité et réduire la promesse si les données ou règles ne sont pas prouvées.",
+    output: "Niveau de faisabilité, risques, prérequis et fichiers à demander.",
+    pitfalls: ["promettre une automatisation totale", "ne pas demander d’exemples", "ignorer les exceptions"],
+  },
+  {
+    id: "poc-mvp-recommendation",
+    label: "POC / MVP recommendation",
+    objective: "Choisir la suite prudente : ne rien faire, audit, POC, MVP ou projet complet.",
+    whenToUse: "Une fois douleur, ROI, risques et faisabilité collectés.",
+    questions: ["Le gain justifie-t-il d’avancer ?", "Les règles sont-elles assez claires ?", "Le client a-t-il des exemples ?", "La prochaine étape doit-elle être audit, POC, MVP ou projet complet ?"],
+    signals: ["gain faible", "règles instables", "gain moyen", "règles claires", "processus fréquent", "plusieurs services impactés"],
+    reasoning: "Adapter l’ambition au couple valeur business / maturité des données.",
+    output: "Recommandation justifiée avec prochaine étape concrète.",
+    pitfalls: ["vendre un MVP quand un audit suffit", "bloquer sur un POC si le ROI et la clarté justifient un MVP", "oublier la validation humaine"],
+  },
+  {
+    id: "commercial-synthesis",
+    label: "Commercial synthesis",
+    objective: "Produire une synthèse exploitable après rendez-vous pour relance, CRM ou proposition.",
+    whenToUse: "À la fin du diagnostic.",
+    questions: ["Quel besoin résumer ?", "Quelle douleur principale ?", "Quel ROI ?", "Quels risques ?", "Quelle phrase commerciale envoyer au client ?"],
+    signals: ["besoin clair", "douleur exprimée", "ROI estimé", "risques cadrés", "prochaine étape acceptée"],
+    reasoning: "Transformer le diagnostic en décision commerciale claire, prudente et actionnable.",
+    output: "Résumé du besoin, processus, douleurs, opportunité, ROI, risques, recommandation et prochaine étape.",
+    pitfalls: ["rédiger trop technique", "oublier les risques", "ne pas terminer par une action"],
+  },
+];
+
+function getSkill(id: DiagnosticSkillId) {
+  return DIAGNOSTIC_SKILLS.find((skill) => skill.id === id) ?? DIAGNOSTIC_SKILLS[0];
+}
+
+function activeSkillIdsForQuestion(questionId?: string): DiagnosticSkillId[] {
+  if (["company", "contact", "activity", "context", "category", "processName", "people", "trigger", "inputs", "transmission"].includes(questionId ?? "")) {
+    return ["process-discovery"];
+  }
+  if (["pain", "tools", "treatment", "controls", "output", "frequentErrors"].includes(questionId ?? "")) {
+    return ["manual-work-detection", "process-discovery"];
+  }
+  if (["currentMinutes", "targetMinutes", "monthlyVolume", "hourlyCost", "errorCost"].includes(questionId ?? "")) {
+    return ["roi-diagnostic"];
+  }
+  if (["hasExamples", "stableStructure", "rulesDocumented", "validatorIdentified", "outputTemplate", "exceptions"].includes(questionId ?? "")) {
+    return ["automation-feasibility"];
+  }
+  if (["idealResult", "nextAction", "interestLevel", "objections"].includes(questionId ?? "")) {
+    return ["poc-mvp-recommendation", "commercial-synthesis"];
+  }
+  return ["process-discovery"];
+}
+
+function formatSkillLabels(ids: DiagnosticSkillId[]) {
+  return ids.map((id) => getSkill(id).label).join(" + ");
+}
+
+function detectManualWorkSignals(diagnostic: DiagnosticState) {
+  const source = [diagnostic.pain, diagnostic.tools, diagnostic.processMap.treatment, diagnostic.frequentErrors, diagnostic.processMap.controls].join(" ").toLowerCase();
+  const signals: Array<[string, RegExp]> = [
+    ["copier-coller", /copier|coller|copy|paste/],
+    ["saisie manuelle", /saisie|ressais|manuel|à la main/],
+    ["lecture PDF", /pdf|scan|ocr/],
+    ["transformation Excel", /excel|csv|tableau|spreadsheet/],
+    ["emails répétitifs", /mail|email|e-mail|relance/],
+    ["contrôle entre fichiers", /contrôl|controle|compar|rapproch|écart/],
+    ["recherche d’informations", /recherch|retrouver|chercher/],
+    ["génération de documents", /génér|document|rapport|pdf/],
+  ];
+  return signals.filter(([, pattern]) => pattern.test(source)).map(([label]) => label);
+}
+
+function buildMethodSummary(diagnostic: DiagnosticState) {
+  const signals = detectManualWorkSignals(diagnostic);
+  return [
+    `Skills métier utilisées : ${DIAGNOSTIC_SKILLS.map((skill) => skill.label).join(", ")}.`,
+    `Signaux de travail manuel détectés : ${signals.length ? signals.join(", ") : "à confirmer pendant l’entretien"}.`,
+    `Garde-fous : demander des exemples réels, vérifier la qualité des données, estimer le ROI, garder une validation humaine et ne pas promettre d’automatisation totale trop tôt.`,
+  ].join("\n");
 }
 
 const questions: Question[] = [
@@ -629,11 +762,16 @@ function classifyComplexity(feasibility: FeasibilityInputs): Complexity {
   return "Moyen";
 }
 
+function hasErpOrMultiToolDependency(diagnostic: DiagnosticState) {
+  return /erp|wms|crm|api|connecteur|intégration|integration|plusieurs outils|multi/i.test([diagnostic.tools, diagnostic.dependencies, diagnostic.processMap.transmission].join(" "));
+}
+
 function recommend(diagnostic: DiagnosticState): { recommendation: Recommendation; reason: string } {
   const roi = calculateRoi(diagnostic.roi);
   const complexity = classifyComplexity(diagnostic.feasibility);
   const volume = numberFrom(diagnostic.roi.monthlyVolume);
   const hasPain = [diagnostic.pain, diagnostic.frequentErrors, diagnostic.errorCost].some((value) => value.trim().length > 8);
+  const hasEnoughEvidence = diagnostic.feasibility.hasExamples || diagnostic.feasibility.rulesDocumented || diagnostic.feasibility.outputTemplate;
 
   if (!hasPain || volume < 3 || roi.monthlyGain < 250) {
     return {
@@ -642,14 +780,21 @@ function recommend(diagnostic: DiagnosticState): { recommendation: Recommendatio
     };
   }
 
-  if (complexity === "Complexe") {
+  if (complexity === "Complexe" && !hasEnoughEvidence) {
     return {
-      recommendation: "POC",
-      reason: "Le potentiel existe, mais les exceptions, formats ou dépendances doivent être prouvés sur un périmètre limité avant engagement.",
+      recommendation: "Audit complémentaire",
+      reason: "Le potentiel existe, mais les règles, exemples ou données ne sont pas assez prouvés pour promettre directement un POC ou un MVP.",
     };
   }
 
-  if (roi.monthlyGain >= 1200 && volume >= 10) {
+  if (roi.monthlyGain >= 2500 && volume >= 20 && hasErpOrMultiToolDependency(diagnostic)) {
+    return {
+      recommendation: "Projet complet",
+      reason: "Le gain potentiel est fort et le processus semble toucher plusieurs outils ou équipes ; il faut cadrer un projet complet avec intégrations, gouvernance et validation métier.",
+    };
+  }
+
+  if (roi.monthlyGain >= 1200 && volume >= 10 && complexity !== "Complexe") {
     return {
       recommendation: "MVP",
       reason: "Le processus est fréquent, coûteux et suffisamment clair pour viser une première version opérationnelle avec validation métier.",
@@ -702,11 +847,23 @@ ${diagnostic.pain || "La douleur principale reste à préciser."}
 - Modèle de sortie : ${diagnostic.feasibility.outputTemplate ? "existant" : "à construire"}
 - Complexité technique : ${complexity}
 
-## 6. Recommandation
+## 6. Méthode de diagnostic
+${buildMethodSummary(diagnostic)}
+
+## 7. Risques et garde-fous
+- Données : ${diagnostic.feasibility.hasExamples ? "exemples disponibles" : "exemples réels à demander"}
+- Règles : ${diagnostic.feasibility.rulesDocumented ? "règles documentées" : "règles à clarifier"}
+- Exceptions : ${diagnostic.feasibility.manyExceptions ? "nombreuses, à cadrer" : "à confirmer"}
+- Validation humaine : ${diagnostic.feasibility.validatorIdentified ? "validateur identifié" : "validateur à identifier"}
+
+## 8. Recommandation
 ${decision.recommendation} — ${decision.reason}
 
-## 7. Prochaine étape
-${diagnostic.nextAction || (decision.recommendation === "Ne rien faire" ? "Ne pas lancer de projet pour l’instant ; revisiter si le volume augmente." : `Demander ${diagnostic.filesToRequest || getCategoryConfig(diagnostic.category).filesToRequest} et cadrer un POC court.`)}`;
+## 9. Phrase commerciale pour le client
+${decision.recommendation === "Ne rien faire" ? "À ce stade, je ne vous conseille pas de lancer un projet d’automatisation : il vaut mieux revisiter le sujet si le volume ou la douleur augmente." : `Le sujet semble avoir un potentiel, mais je vous propose d’avancer prudemment : d’abord vérifier ${diagnostic.filesToRequest || getCategoryConfig(diagnostic.category).filesToRequest}, puis décider du bon format (${decision.recommendation}).`}
+
+## 10. Prochaine étape
+${diagnostic.nextAction || (decision.recommendation === "Ne rien faire" ? "Ne pas lancer de projet pour l’instant ; revisiter si le volume augmente." : `Demander ${diagnostic.filesToRequest || getCategoryConfig(diagnostic.category).filesToRequest} et cadrer la suite.`)}`;
 }
 
 function buildCrmSummary(diagnostic: DiagnosticState, transcript: TranscriptItem[]) {
@@ -728,6 +885,7 @@ function buildCrmSummary(diagnostic: DiagnosticState, transcript: TranscriptItem
 - Temps actuel : ${diagnostic.roi.currentMinutes || "0"} min
 - Gain mensuel / annuel estimé : ${formatCurrency(roi.monthlyGain)} / ${formatCurrency(roi.annualGain)}
 - Complexité : ${complexity}
+- Signaux de travail manuel : ${detectManualWorkSignals(diagnostic).join(", ") || "à confirmer"}
 - Recommandation : ${decision.recommendation}
 - Justification : ${decision.reason}
 - Prochaine action : ${diagnostic.nextAction || "à définir"}
@@ -878,6 +1036,7 @@ export default function Home() {
   const currentQuestion = questions[Math.min(currentIndex, questions.length - 1)];
   const currentPrompt = currentQuestion ? buildContextualQuestion(currentQuestion, diagnostic) : "";
   const currentWhy = currentQuestion ? buildContextualWhy(currentQuestion, diagnostic) : "";
+  const activeSkillIds = currentQuestion ? activeSkillIdsForQuestion(currentQuestion.id) : ["process-discovery" as DiagnosticSkillId];
   const progress = status === "done" ? 100 : Math.round((currentIndex / questions.length) * 100);
   const remaining = Math.max(questions.length - currentIndex, 0);
   const roi = useMemo(() => calculateRoi(diagnostic.roi), [diagnostic.roi]);
@@ -1034,6 +1193,9 @@ export default function Home() {
                 <p className="text-sm font-semibold uppercase tracking-[0.2em] text-cyan-200">Agent IA</p>
                 <h2 className="mt-3 text-2xl font-semibold leading-tight md:text-4xl">{currentPrompt}</h2>
                 <p className="mt-4 text-sm leading-6 text-cyan-50/80">{currentWhy}</p>
+                <p className="mt-3 rounded-2xl border border-white/10 bg-black/20 px-4 py-3 text-xs leading-5 text-cyan-50/75">
+                  Skill métier active : {formatSkillLabels(activeSkillIds)}
+                </p>
               </div>
 
               <form onSubmit={submitAnswer} className="space-y-4">
@@ -1079,6 +1241,7 @@ export default function Home() {
 
             <aside className="space-y-5">
               <SummaryCard title="Contexte adapté" rows={[`Catégorie : ${categoryLabel(diagnostic.category)}`, `À demander : ${diagnostic.filesToRequest}`, `Exemples : ${formatExamples(getCategoryConfig(diagnostic.category).typicalTasks)}`]} />
+              <SummaryCard title="Skills métier" rows={[`Active : ${formatSkillLabels(activeSkillIds)}`, `Signaux manuels : ${detectManualWorkSignals(diagnostic).join(", ") || "à confirmer"}`, "Garde-fou : ROI + exemples réels avant recommandation"]} />
               <SummaryCard title="ROI estimé" rows={[`Gain/traitement : ${formatHours(roi.savedMinutes)}`, `Gain mensuel : ${formatCurrency(roi.monthlyGain)}`, `Gain annuel : ${formatCurrency(roi.annualGain)}`]} />
               <SummaryCard title="Décision provisoire" rows={[`Complexité : ${complexity}`, `Recommandation : ${decision.recommendation}`, decision.reason]} />
               <section className="rounded-[2rem] border border-white/10 bg-white/[0.04] p-5">
